@@ -1,0 +1,1090 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+	<title>three.js webgl - loaders - MMD loader</title>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+	<link type="text/css" rel="stylesheet" href="main.css">
+	<style>
+		body {
+			background-color: #fff;
+			color: #444;
+		}
+
+		a {
+			color: #08f;
+		}
+	</style>
+</head>
+
+<body>
+	<div id="info"></div>
+
+	<script src="js/libs/ammo.wasm.js"></script>
+	<script src="scoreoutputer.min.js"></script>
+	<script>
+		// 建構子 ScoreOutputer 接受一個字串，該字串為 csv 的檔案名稱
+		// 以下面範例，檔名就為 "109598105(總分: 6).csv"
+		var so = new ScoreOutputer("109598050");
+		so.installCSS(function () {
+			// 安裝 bootstrap 的 css，如果在 html 上方引用 bootstrap 5.1.1 的話就不用使用 installCSS ，注意一定要 bootstrap css 5.1.1 版
+			// installCSS 接收一個 callback 當作參數，作為成功安裝 bootstrap css 的回呼函式
+
+			//加入項目，分數，完成狀況
+			//第一個參數為 項目名稱
+			//第2個參數為 項目分數
+			//第3個參數為 完成狀況，有完成 true/未完成 false
+			//有幾個項目就呼叫幾個 addChild
+			//addChild 要比 renderModal 先呼叫
+			so.addChild("繪製出 5 個畫面", 1, true);
+			so.addChild("回答問題", 1, true);
+			so.addChild("可按鍵選擇上 / 下一隻角色", 1, true);
+			so.addChild("讀取作業 2 儲存的座標點在眼睛上繪製出分割線", 1, true);
+			so.addChild("可選擇當下控制哪個虹膜", 1, true);
+			so.addChild("按滑鼠左鍵控制虹膜移動，右鍵停止", 2, true);
+			so.addChild("複製參數至對應目標參數", 2, true);
+			so.addChild("可儲存虹膜轉動角度", 1, false);
+
+			//產生自評表，參數如下所示
+			so.renderModal(
+				//1. 自評表插入位置 (預設 document.body)
+				document.body,
+				//2. 自評表背景 (預設紅色)
+				'rgba(100,45,58,1)',
+				//3. 自評表文字顏色 (預設白色)
+				'white',
+				//4. 自評表文字大小 (預設 14pt)
+				'15pt',
+				//5. 自評表 checkbox 文字大小 (預設多少忘了)
+				'15px',
+				//6. 自評表標題 (預設 "自我評分表")
+				dialogTitle = "自我評分表"
+			);
+
+			//設定下載按鈕 <-- 一定要呼叫這個函數，不然沒有下載功能
+			so.installDownloadBtn();
+
+			//產生 "開啟自評表按鈕"
+			so.renderBtn(
+				//自評表按鈕插入位置
+				document.querySelector("#info"),
+				//自評表按鈕文字
+				"開啟自評表"
+			);
+		});
+	</script>
+	<script type="module">
+
+		import * as THREE from './build/three.module.js';
+		import { GUI } from './jsm/libs/dat.gui.module.js';
+		import { OrbitControls } from './jsm/controls/OrbitControls.js';
+		import { OutlineEffect } from './jsm/effects/OutlineEffect.js';
+		import { MMDLoader } from './jsm/loaders/MMDLoader.js';
+		import { MMDAnimationHelper } from './jsm/animation/MMDAnimationHelper.js';
+
+		let scene, renderer, effect;
+		let mesh, helper;
+		let SCREEN_WIDTH = window.innerWidth;
+		let SCREEN_HEIGHT = window.innerHeight;
+		let aspect = SCREEN_WIDTH / SCREEN_HEIGHT;
+		let frustumSize0 = 2.5;
+		let frustumSize = 8;
+		let camera, camera2, camera3, camera4, camera5;
+		let eyeHeight, eyeWidth;
+		let temp, tempX, tempY, saveX, saveY;
+		let eyeMove = false;
+
+		let eyeControlLeft = 1; //控制哪一個左眼
+		let eyeControlRight = 1; //控制哪一個右眼
+		//let eyeSelect = 1;
+		let modelState = 1;
+		let inputkey;
+		var dataUrl;
+		var linesInfro = {
+			location:"",
+            line_locationx_1:0,
+            line_locationy_1:0,
+            line_locationx_2:0,
+            line_locationy_2:0,
+            line_locationx_3:0,
+            line_locationy_3:0,
+            line_locationx_4:0,
+            line_locationy_4:0
+		};  //把1234的線座標存起來
+		var mouseWorld = new THREE.Vector3();
+		var outputData = {
+			location:"",
+            Right_X_negative_angle:0,
+			Left_X_negative_angle:0,
+            Right_X_positive_angle:0,
+			Left_X_positive_angle:0,
+            Right_Y_negative_angle:0,
+			Left_Y_negative_angle:0,
+            Right_Y_positive_angle:0,
+			Left_Y_positive_angle:0
+		};
+		var recordX, recordY, recordXmax = 0, recordXmin = 0, recordYmax = 0, 
+		recordYmin = 0, recordXmid = 0, recordYmid = 0;
+		var camera2recordX, camera2recordY; //相機2的xy
+		var camera3recordX, camera3recordY; //相機3的xy
+		var camera4recordX, camera4recordY; //相機4的xy
+		var camera5recordX, camera5recordY; //相機5的xy
+		var cameraPointer = 2; //控制相機
+		var editWhere = 0; //目前在編輯左眼 = 0還是右眼 = 1
+
+		let modelFile = [
+			'models/mmd/るいのれ式物述有栖_配布用フォルダ/物述有栖.pmx',
+			'models/mmd/kizunaai/kizunaai.pmx',
+            'models/mmd/『天宮こころ(Kokoro Amamiya)』/『天宮こころ(Kokoro Amamiya)』.pmx'
+		];
+
+		Ammo().then(function (AmmoLib) {
+
+			Ammo = AmmoLib;
+
+			init();
+			initRecord();
+			animate();
+
+		});
+
+		var body = document.body;       
+		//document.body.addEventListener('mousemove', getPosition, false);
+		document.onmousedown = function(events){
+            console.log('mouse click: ' + events.button);
+            switch(events.button){
+                case 0:
+				    eyeMove = true; 
+                    body.addEventListener('mousemove', getPosition, false); //在body加上監聽(滑鼠移動時, 呼叫getPosition) 
+					//testMouseControl();            
+                    break;
+                case 2:
+                    body.removeEventListener('mousemove', getPosition, false); //在body加上監聽(滑鼠移動時, 呼叫getPosition)
+					writeRecord();
+					tempX = null;
+			        tempY = null;
+					eyeMove = false;
+                    break;
+                default:
+                    console.log("not mouse");
+            }
+        }
+
+		function init() {
+
+			/*dataUrl= "./json/kizunaai_modelData.json";
+            var xhr = new XMLHttpRequest()
+            xhr.open('GET',dataUrl, true)
+            xhr.send()
+			xhr.onload = function(){
+  			    var dataset = JSON.parse(this.responseText);
+    		    console.log(dataset);
+			}*/
+
+			const container = document.createElement('div');
+			document.body.appendChild(container);
+			camera = new THREE.OrthographicCamera(0.5 * frustumSize0 * aspect / - 2, 0.5 * frustumSize0 * aspect / 2, frustumSize0 / 2, frustumSize0 / - 2, 0.1, 1000);
+			camera2 = new THREE.OrthographicCamera(0.25 * frustumSize * aspect / - 2, 0.25 * frustumSize * aspect / 2, 0.5 * frustumSize / 2, 0.5 * frustumSize / - 2, 0.1, 1000);
+			camera3 = new THREE.OrthographicCamera(0.25 * frustumSize * aspect / - 2, 0.25 * frustumSize * aspect / 2, 0.5 * frustumSize / 2, 0.5 * frustumSize / - 2, 0.1, 1000);
+			camera4 = new THREE.OrthographicCamera(0.25 * frustumSize * aspect / - 2, 0.25 * frustumSize * aspect / 2, 0.5 * frustumSize / 2, 0.5 * frustumSize / - 2, 0.1, 1000);
+			camera5 = new THREE.OrthographicCamera(0.25 * frustumSize * aspect / - 2, 0.25 * frustumSize * aspect / 2, 0.5 * frustumSize / 2, 0.5 * frustumSize / - 2, 0.1, 1000);
+			camera.position.x = 0.75;
+			camera.position.y = 8;
+			camera.position.z = 30;
+			camera2.position.y = 8;
+			camera2.position.z = 30;
+			camera3.position.y = 8;
+			camera3.position.z = 30;
+			camera4.position.y = 8;
+			camera4.position.z = 30;
+			camera5.position.y = 8;
+			camera5.position.z = 30;
+
+			// scene
+
+			scene = new THREE.Scene();
+			const ambient = new THREE.AmbientLight(0x666666);
+			scene.add(ambient);
+
+			const directionalLight = new THREE.DirectionalLight(0x887766);
+			directionalLight.position.set(- 1, 1, 1).normalize();
+			scene.add(directionalLight);
+
+			//
+
+			renderer = new THREE.WebGLRenderer({ antialias: true });
+			renderer.setPixelRatio(window.devicePixelRatio);
+			renderer.setSize(window.innerWidth, window.innerHeight);
+			container.appendChild(renderer.domElement);
+			renderer.autoClear = false;
+			effect = new OutlineEffect(renderer);
+
+			// model
+			function onProgress(xhr) {
+
+				if (xhr.lengthComputable) {
+
+					const percentComplete = xhr.loaded / xhr.total * 100;
+					console.log(Math.round(percentComplete, 2) + '% downloaded');
+
+				}
+                drawInitLine();
+			}
+
+			//const modelFile = 'models/mmd/kizunaai/kizunaai.pmx';
+
+			helper = new MMDAnimationHelper();
+
+			const loader = new MMDLoader();
+
+			loader.load(modelFile[modelState], function (object) {
+
+				mesh = object;
+				mesh.position.y = - 10;
+				mesh.scale.set(1, 1, 1);
+				mesh.name = "mesh";
+
+				//console.log(mesh);
+
+				scene.add(mesh);
+
+			}, onProgress, null);
+
+			//
+			//
+
+			window.addEventListener('resize', onWindowResize);
+			//鏡頭控制
+
+		}
+
+		function onWindowResize() {
+
+			SCREEN_WIDTH = window.innerWidth;
+			SCREEN_HEIGHT = window.innerHeight;
+			aspect = SCREEN_WIDTH / SCREEN_HEIGHT;
+
+			effect.setSize(SCREEN_WIDTH, SCREEN_HEIGHT);
+
+			camera.left = 0.5 * frustumSize * aspect / - 2;
+			camera.right = 0.5 * frustumSize * aspect / 2;
+			camera.top = frustumSize / 2;
+			camera.bottom = - frustumSize / 2;
+			camera.updateProjectionMatrix();
+
+			camera2.left = 0.25 * frustumSize * aspect / - 2;
+			camera2.right = 0.25 * frustumSize * aspect / 2;
+			camera2.top = 0.5 * frustumSize / 2;
+			camera2.bottom = - 0.5 * frustumSize / 2;
+			camera2.updateProjectionMatrix();
+
+			camera3.left = 0.25 * frustumSize * aspect / - 2;
+			camera3.right = 0.25 * frustumSize * aspect / 2;
+			camera3.top = 0.5 * frustumSize / 2;
+			camera3.bottom = - 0.5 * frustumSize / 2;
+			camera3.updateProjectionMatrix();
+
+			camera4.left = 0.25 * frustumSize * aspect / - 2;
+			camera4.right = 0.25 * frustumSize * aspect / 2;
+			camera4.top = 0.5 * frustumSize / 2;
+			camera4.bottom = - 0.5 * frustumSize / 2;
+			camera4.updateProjectionMatrix();
+
+			camera5.left = 0.25 * frustumSize * aspect / - 2;
+			camera5.right = 0.25 * frustumSize * aspect / 2;
+			camera5.top = 0.5 * frustumSize / 2;
+			camera5.bottom = - 0.5 * frustumSize / 2;
+			camera5.updateProjectionMatrix();
+		}
+
+		//
+
+		document.onkeydown = function(event) {
+			if (event.keyCode == 49) {
+                console.log('you click 1!');
+			    inputkey = 1; 
+				if(eyeControlLeft == 1) {
+					eyeControlLeft = 4; //1 = 2號相機, 以此類推
+				}
+				else {
+					eyeControlLeft -= 1;
+				} 
+				console.log('eyeControlLeft = ' + eyeControlLeft);
+				editWhere = 0;
+				eyeHeightWidth();
+				leftLines();
+			}
+			if (event.keyCode == 50) {
+                console.log('you click 2!');
+			    inputkey = 2;
+				if(eyeControlRight == 4) {
+					eyeControlRight = 1;
+				}
+				else {
+					eyeControlRight += 1;
+				} 
+				console.log('eyeControlRight = ' + eyeControlRight);
+				editWhere = 1;
+				eyeHeightWidth();
+				rightLines();
+			}
+			if (event.keyCode == 81) {
+                console.log('you click Q!');
+			    inputkey = 81;
+				eyeHeightWidth();
+				if (editWhere == 0) //eyeWhere = 0表示目前控制模型的左眼
+				{
+					//rightLines();
+					//editWhere = 1;
+					modelCopy();
+				}
+				else if (editWhere == 1) //eyeWhere = 1表示目前控制模型的右眼
+				{
+                    //leftLines();
+					//editWhere = 0;
+					modelCopy();
+				}
+			}
+			if (event.keyCode == 83) {
+                console.log('you click S!');
+			    inputkey = 83;
+				console.log(outputData);
+				//var record = THREE.MathUtils.degToRad();
+				writeRecord();
+                openJSONFile();
+			}
+			if (event.keyCode == 65) {
+                console.log('you click A!');
+			    inputkey = 65;
+                if(modelState == 0){
+					modelState = 2;
+					modelLoader();
+				}  
+				else if(modelState == 1){
+					modelState = 0;
+					modelLoader();
+				}
+				else if(modelState == 2){
+					modelState = 1;
+					modelLoader();
+				}  
+				eyeControl = 0;
+			}
+			if (event.keyCode == 68) {
+                console.log('you click D!');
+			    inputkey = 68;
+				if(modelState == 0){
+                    modelState = 1;
+					modelLoader();
+				}    
+				else if(modelState == 1){
+                    modelState = 2;
+					modelLoader();
+				}     	    
+				else if(modelState == 2){
+                    modelState = 0;
+					modelLoader();
+				}	    
+				eyeControl = 0; 	    
+			}
+		}
+
+		function modelLoader() {
+			const loader = new MMDLoader();
+
+            loader.load(modelFile[modelState], function (object) {
+
+	            mesh = object;
+	            mesh.position.y = - 10;
+				mesh.scale.set(1, 1, 1);
+			    mesh.name = "mesh";
+		        scene.remove( scene.getObjectByName("mesh"));
+
+	            scene.add(mesh);
+				//console.log(mesh);
+
+            }, onProgress, null);
+
+			tempX = null;
+			tempY = null;
+			drawInitLine();
+			initRecord();
+
+			if(modelState == 0){
+                camera.position.y = 4;
+				camera2.position.y = 4;
+				camera3.position.y = 4;
+				camera4.position.y = 4;
+				camera5.position.y = 4;
+			}
+			else if(modelState == 1){
+				camera.position.y = 8;
+				camera2.position.y = 8;
+				camera3.position.y = 8;
+				camera4.position.y = 8;
+				camera5.position.y = 8;
+			}
+			else if(modelState == 2){
+				camera.position.y = 5;
+				camera2.position.y = 5;
+				camera3.position.y = 5;
+				camera4.position.y = 5;
+				camera5.position.y = 5;
+			}
+		}
+
+		function onProgress(xhr) {
+
+            if (xhr.lengthComputable) {
+
+	            const percentComplete = xhr.loaded / xhr.total * 100;
+	            console.log(Math.round(percentComplete, 2) + '% downloaded');
+
+            }
+
+        }
+
+		function drawInitLine() {
+			if(modelState == 0) {
+				dataUrl= "./json/物述有栖_modelData.json";
+			}
+			else if(modelState == 1) {
+				dataUrl= "./json/kizunaai_modelData.json";
+			}
+			else if(modelState == 2){
+				dataUrl= "./json/天宮こころ_modelData.json";
+			}
+            var xhr = new XMLHttpRequest()
+            xhr.open('GET',dataUrl, true)
+            xhr.send()
+			xhr.onload = function(){
+  			    var dataset = JSON.parse(this.responseText);
+    		    //console.log(dataset);
+
+		        //console.log(dataset.line_locationx_1);
+				linesInfro.line_locationx_1 = dataset.line_locationx_1;
+				linesInfro.line_locationy_1 = dataset.line_locationy_1;
+				linesInfro.line_locationx_2 = dataset.line_locationx_2;
+				linesInfro.line_locationy_2 = dataset.line_locationy_2;
+				linesInfro.line_locationx_3 = dataset.line_locationx_3;
+				linesInfro.line_locationy_3 = dataset.line_locationy_3;
+				linesInfro.line_locationx_4 = dataset.line_locationx_4;
+				linesInfro.line_locationy_4 = dataset.line_locationy_4;
+				linesInfro.location = dataset.location;
+
+				//console.log(linesInfro);
+				eyeHeightWidth();
+                leftLines();
+			}
+		}
+
+		function leftLines() {    //畫右邊的線條
+            drawRed(linesInfro.line_locationx_1, linesInfro.line_locationy_1, 1);
+			drawRed(linesInfro.line_locationx_3, linesInfro.line_locationy_3, 3);
+
+			drawRed(linesInfro.line_locationx_1, linesInfro.line_locationy_1 - (eyeHeight * 0.25), 9);
+			drawRed(linesInfro.line_locationx_1, linesInfro.line_locationy_1 - (eyeHeight * 0.5), 10);
+			drawRed(linesInfro.line_locationx_1, linesInfro.line_locationy_1 - (eyeHeight * 0.75), 11);
+
+			drawGreen(linesInfro.line_locationx_2, linesInfro.line_locationy_2, 2);
+			drawGreen(linesInfro.line_locationx_4, linesInfro.line_locationy_4, 4);
+
+			drawGreen(linesInfro.line_locationx_2 - (eyeWidth * 0.125 * 1), linesInfro.line_locationy_2, 15);
+			drawGreen(linesInfro.line_locationx_2 - (eyeWidth * 0.125 * 2), linesInfro.line_locationy_2, 16);
+			drawGreen(linesInfro.line_locationx_2 - (eyeWidth * 0.125 * 3), linesInfro.line_locationy_2, 17);
+			drawGreen(linesInfro.line_locationx_2 - (eyeWidth * 0.125 * 4), linesInfro.line_locationy_2, 18);
+			drawGreen(linesInfro.line_locationx_2 - (eyeWidth * 0.125 * 5), linesInfro.line_locationy_2, 19);
+			drawGreen(linesInfro.line_locationx_2 - (eyeWidth * 0.125 * 6), linesInfro.line_locationy_2, 20);
+			drawGreen(linesInfro.line_locationx_2 - (eyeWidth * 0.125 * 7), linesInfro.line_locationy_2, 21);
+
+			if(modelState == 0){
+                camera.position.x = 0.75;
+			}
+			else if(modelState == 1){
+				camera.position.x = 0.75;
+			}
+			else if(modelState == 2){
+				camera.position.x = 0.75;
+			}
+		}
+
+		function rightLines() {    //畫左邊的線條
+            drawRed(-(linesInfro.line_locationx_1), linesInfro.line_locationy_1, 5);
+			drawRed(-(linesInfro.line_locationx_3), linesInfro.line_locationy_3, 7);
+
+			drawRed(-(linesInfro.line_locationx_1), linesInfro.line_locationy_1 - (eyeHeight * 0.25), 12);
+			drawRed(-(linesInfro.line_locationx_1), linesInfro.line_locationy_1 - (eyeHeight * 0.5), 13);
+			drawRed(-(linesInfro.line_locationx_1), linesInfro.line_locationy_1 - (eyeHeight * 0.75), 14);
+
+			drawGreen(-(linesInfro.line_locationx_2), linesInfro.line_locationy_2, 6);
+			drawGreen(-(linesInfro.line_locationx_4), linesInfro.line_locationy_4, 8);
+
+			drawGreen(-(linesInfro.line_locationx_4 + (eyeWidth * 0.125 * 1)), linesInfro.line_locationy_2, 15);
+			drawGreen(-(linesInfro.line_locationx_4 + (eyeWidth * 0.125 * 2)), linesInfro.line_locationy_2, 16);
+			drawGreen(-(linesInfro.line_locationx_4 + (eyeWidth * 0.125 * 3)), linesInfro.line_locationy_2, 17);
+			drawGreen(-(linesInfro.line_locationx_4 + (eyeWidth * 0.125 * 4)), linesInfro.line_locationy_2, 18);
+			drawGreen(-(linesInfro.line_locationx_4 + (eyeWidth * 0.125 * 5)), linesInfro.line_locationy_2, 19);
+			drawGreen(-(linesInfro.line_locationx_4 + (eyeWidth * 0.125 * 6)), linesInfro.line_locationy_2, 20);
+			drawGreen(-(linesInfro.line_locationx_4 + (eyeWidth * 0.125 * 7)), linesInfro.line_locationy_2, 21);
+
+			if(modelState == 0){
+                camera.position.x = -0.75;
+			}
+			else if(modelState == 1){
+                camera.position.x = -0.75;
+			}
+			else if(modelState == 2){
+				camera.position.x = -0.75;
+			}
+		}
+
+		function eyeHeightWidth(){
+			eyeWidth = linesInfro.line_locationx_2 - linesInfro.line_locationx_4;
+			eyeHeight = linesInfro.line_locationy_1 - linesInfro.line_locationy_3;
+			//console.log('eyeWidth = ' + eyeWidth);
+			//console.log('eyeHeight = ' + eyeHeight);
+		}
+
+		function drawRed(line_locationx, line_locationy, num) {
+			//console.log(line_locationy);
+			let material = new THREE.LineBasicMaterial( { color: 0xff0000 } );  //紅色
+			let points = [];
+            points.push( new THREE.Vector3( line_locationx - 1, line_locationy, 20 ) );
+            points.push( new THREE.Vector3( line_locationx + 1, line_locationy, 20 ) );
+
+            let geometry = new THREE.BufferGeometry().setFromPoints( points );
+			let line = new THREE.Line( geometry, material );
+            
+			if(num == 1 || num == 5) {
+				line.name = "redLine1";
+			    scene.remove( scene.getObjectByName("redLine1"));
+				//console.log('1');
+			}
+			else if(num == 3 || num == 7){
+				line.name = "redLine3";
+			    scene.remove( scene.getObjectByName("redLine3"));
+				//console.log('3');
+			}
+			else if(num == 9 || num == 12){
+				line.name = "redLine9";
+			    scene.remove( scene.getObjectByName("redLine9"));
+				//console.log('9');
+			}
+			else if(num == 10 || num == 13){
+				line.name = "redLine10";
+			    scene.remove( scene.getObjectByName("redLine10"));
+				//console.log('10');
+			}
+			else if(num == 11 || num == 14){
+				line.name = "redLine11";
+			    scene.remove( scene.getObjectByName("redLine11"));
+				//console.log('11');
+			}
+			
+			scene.add(line);
+		}
+
+		function drawGreen(line_locationx, line_locationy, num) {
+			let material = new THREE.LineBasicMaterial( { color: 0x00ff00 } );  //綠色
+			let points = [];
+            points.push( new THREE.Vector3( line_locationx, line_locationy - 1, 20 ) );
+            points.push( new THREE.Vector3( line_locationx, line_locationy + 1, 20 ) );
+
+            let geometry = new THREE.BufferGeometry().setFromPoints( points );
+			let line = new THREE.Line( geometry, material );
+			
+			if(num == 2 || num == 6) {
+				line.name = "greenLine2";
+			    scene.remove( scene.getObjectByName("greenLine2"));
+				//console.log('2');
+			}
+			else if(num == 4 || num == 8){
+				line.name = "greenLine4";
+			    scene.remove( scene.getObjectByName("greenLine4"));
+				//console.log('4');
+			}
+			else if(num == 15){
+				line.name = "greenLine15";
+			    scene.remove( scene.getObjectByName("greenLine15"));
+				//console.log('15');
+			}
+			else if(num == 16){
+				line.name = "greenLine16";
+			    scene.remove( scene.getObjectByName("greenLine16"));
+				//console.log('16');
+			}
+			else if(num == 17){
+				line.name = "greenLine17";
+			    scene.remove( scene.getObjectByName("greenLine17"));
+				//console.log('17');
+			}
+			else if(num == 18){
+				line.name = "greenLine18";
+			    scene.remove( scene.getObjectByName("greenLine18"));
+				//console.log('18');
+			}
+			else if(num == 19){
+				line.name = "greenLine19";
+			    scene.remove( scene.getObjectByName("greenLine19"));
+				//console.log('19');
+			}
+			else if(num == 20){
+				line.name = "greenLine20";
+			    scene.remove( scene.getObjectByName("greenLine20"));
+				//console.log('20');
+			}
+			else if(num == 21){
+				line.name = "greenLine21";
+			    scene.remove( scene.getObjectByName("greenLine21"));
+				//console.log('21');
+			}
+
+			scene.add(line);
+		}
+
+		function getPosition(e) {    //讀取滑鼠座標位置
+            const { left, top, width, height } = e.currentTarget.getBoundingClientRect();
+            mouseWorld.set(
+                ((e.clientX - left + 1) / width) * 2 - 1,
+                -((e.clientY - top + 1) / height) * 2 + 1,
+                (camera.near + camera.far) / (camera.near - camera.far),
+            );
+			//mouseWorld.unproject(camera);
+			testMouseControl();
+		}
+
+		function testMouseControl() {
+			//左11 右13 -> 物述有栖
+			//左86 右88-> kizunaai
+			//左49 右51-> 天宮こころ
+			if(editWhere == 0){
+				if(modelState == 0){
+					findMesh(11);
+				}
+				else if(modelState == 1){
+					findMesh(86);
+				}
+				else if(modelState == 2){
+					findMesh(49);	
+				}
+			}
+			else
+			{
+				if(modelState == 0){
+					findMesh(13);
+				}
+				else if(modelState == 1){
+					findMesh(88);
+				}
+				else if(modelState == 2){
+					findMesh(51);
+				}
+			}
+		}
+
+		function findMesh(bonesNum) {
+			var i, correct;
+			//console.log(eyeControl);
+			for(i = 0; i < 17; i++)
+			{
+				if(scene.children[i].name == 'mesh')
+				{
+					correct = i;
+					//if(eyeControlLeft == 0 || eyeControlLeft == 1 || eyeControlLeft == 2 || eyeControlLeft == 3 || 
+					//eyeControlRight == 0 || eyeControlRight == 1 || eyeControlRight == 2 || eyeControlRight == 3) {  //左眼右眼
+					if(tempY == null) {
+                        tempY = mouseWorld.y;
+						tempX = mouseWorld.x;
+					}
+                    else {
+                         temp = tempY - mouseWorld.y;
+                        scene.children[i].skeleton.bones[bonesNum].rotation.x += temp;
+						tempY = mouseWorld.y;
+
+						temp = tempX - mouseWorld.x;
+                        scene.children[i].skeleton.bones[bonesNum].rotation.y -= temp;
+						tempX = mouseWorld.x;
+					}
+					//}
+					saveX = scene.children[i].skeleton.bones[bonesNum].rotation.x;
+					saveY = scene.children[i].skeleton.bones[bonesNum].rotation.y;	
+					///*
+					recordX = THREE.MathUtils.radToDeg(saveX);
+					recordY = THREE.MathUtils.radToDeg(saveY);
+					
+					console.log('recordX = ' + recordX);
+					console.log('recordY = ' + recordY);
+				}
+			}
+		}
+
+		function modelCopy() {
+			//左11 右13 -> 物述有栖
+			//左86 右88-> kizunaai
+			//左49 右51-> 天宮こころ
+			/*if(editWhere == 0){  //左眼
+				if(modelState == 0){
+					copyMesh(11);
+				}
+				else if(modelState == 1){
+					copyMesh(86);
+				}
+				else if(modelState == 2){
+					copyMesh(49);	
+				}
+			}
+			else{               //右眼
+				if(modelState == 0){  
+					copyMesh(13);
+				}
+				else if(modelState == 1){
+					copyMesh(88);
+				}
+				else if(modelState == 2){
+					copyMesh(51);
+				}
+			}*/
+			//將左眼的角度存到分配給各相機
+			if(eyeControlLeft == 1 && editWhere == 0) { //2號相機左眼
+				//outputData.Left_X_negative_angle = camera2recordX;
+				outputData.Right_X_negative_angle = outputData.Left_X_negative_angle;
+			}
+			else if(eyeControlLeft == 2 && editWhere == 0) { //3號相機左眼
+				//outputData.Left_X_positive_angle = camera3recordX;
+				outputData.Right_X_positive_angle = outputData.Left_X_positive_angle;
+            }
+            else if(eyeControlLeft == 3 && editWhere == 0) { //4號相機左眼
+				//outputData.Left_Y_negative_angle = camera4recordY;
+				outputData.Right_Y_positive_angle = -outputData.Left_Y_negative_angle;
+			}
+			else if(eyeControlLeft == 4 && editWhere == 0) { //5號相機左眼
+				//outputData.Left_Y_positive_angle = camera5recordY;
+				outputData.Right_Y_negative_angle = -outputData.Left_Y_positive_angle;
+			}
+            //將右眼的角度存到分配給各相機
+			if(eyeControlRight == 1 && editWhere == 1) { //2號相機右眼
+				//outputData.Right_X_negative_angle = camera2recordX;
+				outputData.Left_X_negative_angle = outputData.Right_X_negative_angle;
+			}
+			else if(eyeControlRight == 2 && editWhere == 1) { //3號相機右眼
+				//outputData.Right_X_positive_angle = camera3recordX;
+				outputData.Left_X_positive_angle = outputData.Right_X_positive_angle;
+            }
+            else if(eyeControlRight == 3 && editWhere == 1) { //4號相機右眼
+				//outputData.Right_Y_negative_angle = camera4recordY;
+				outputData.Left_Y_positive_angle = -outputData.Right_Y_negative_angle;
+			}
+			else if(eyeControlRight == 4 && editWhere == 1) { //5號相機右眼
+				//outputData.Right_Y_positive_angle = camera5recordY;
+				outputData.Left_Y_negative_angle = -outputData.Right_Y_positive_angle;
+			}
+		}
+
+		function copyMesh(bonesNum) {
+			var i, correct;
+			//console.log(eyeControl);
+			for(i = 0; i < 17; i++)
+			{
+				if(scene.children[i].name == 'mesh')
+				{
+					correct = i;
+					//console.log(mouseWorld.x + ', ' + mouseWorld.y);
+					/*if(eyeControlLeft == 0 || eyeControlLeft == 1 || eyeControlLeft == 2 || eyeControlLeft == 3 || 
+					eyeControlRight == 0 || eyeControlRight == 1 || eyeControlRight == 2 || eyeControlRight == 3) {  //左眼
+                        scene.children[i].skeleton.bones[bonesNum].rotation.x = saveX;
+                        scene.children[i].skeleton.bones[bonesNum].rotation.y = saveY;
+					}				*/	
+				}
+
+			}
+		}
+
+		function openJSONFile() {
+            var data = JSON.stringify(outputData);
+            var outputFile;
+			if(modelState == 0) {
+                outputFile = "物述有栖_modelData_result.json";
+			}
+			else if(modelState == 1) {
+				outputFile = "kizunaai_modelData_result.json";
+			}
+			else if(modelState == 2){
+				outputFile = "天宮こころ_modelData_result.json";
+			}
+			console.log(outputFile);
+
+			var file = new Blob([data], {type: "application/json"});
+			if (window.navigator.msSaveOrOpenBlob) // work on IE10+
+                window.navigator.msSaveOrOpenBlob(file, outputFile);
+            else { // Others like google chrome
+				console.log("ping!");
+                var a = document.createElement("a"),
+                        url = URL.createObjectURL(file);
+                a.href = url;
+                a.download = outputFile;
+                document.body.appendChild(a);
+                a.click();
+                setTimeout(function() {
+                    document.body.removeChild(a);
+                    window.URL.revokeObjectURL(url);  
+                }, 0); 
+            }
+		}
+
+		function initRecord() {
+			recordXmax = 0;
+			recordXmin = 0; 
+			recordYmax = 0; 
+		    recordYmin = 0;
+			recordXmid = 0; 
+			recordYmid = 0;
+		}
+
+		function writeRecord() {
+			console.log('eyeControlLeft = ' + eyeControlLeft);
+			console.log('eyeControlRight = ' + eyeControlRight);
+			//將左眼的角度存到分配給各相機
+			if(eyeControlLeft == 1 && editWhere == 0) { //2號相機左眼
+				camera2recordX = recordX;
+				camera2recordY = recordY;
+				console.log('2recordX = ' + camera2recordX);
+				console.log('2recordY = ' + camera2recordY);
+				outputData.Left_X_negative_angle = camera2recordX;
+			}
+			else if(eyeControlLeft == 2 && editWhere == 0) { //3號相機左眼
+				camera3recordX = recordX;
+				camera3recordY = recordY;
+				console.log('3recordX = ' + camera3recordX);
+				console.log('3recordY = ' + camera3recordY);
+				outputData.Left_X_positive_angle = camera3recordX;
+            }
+            else if(eyeControlLeft == 3 && editWhere == 0) { //4號相機左眼
+				camera4recordX = recordX;
+				camera4recordY = recordY;
+				console.log('4recordX = ' + camera4recordX);
+				console.log('4recordY = ' + camera4recordY);
+				outputData.Left_Y_negative_angle = camera4recordY;
+			}
+			else if(eyeControlLeft == 4 && editWhere == 0) { //5號相機左眼
+				camera5recordX = recordX;
+				camera5recordY = recordY;
+				console.log('5recordX = ' + camera5recordX);
+				console.log('5recordY = ' + camera5recordY);
+				outputData.Left_Y_positive_angle = camera5recordY;
+			}
+            //將右眼的角度存到分配給各相機
+			if(eyeControlRight == 1 && editWhere == 1) { //2號相機右眼
+				camera2recordX = recordX;
+				camera2recordY = recordY;
+
+				outputData.Right_X_negative_angle = camera2recordX;
+			}
+			else if(eyeControlRight == 2 && editWhere == 1) { //3號相機右眼
+				camera3recordX = recordX;
+				camera3recordY = recordY;
+
+				outputData.Right_X_positive_angle = camera3recordX;
+            }
+            else if(eyeControlRight == 3 && editWhere == 1) { //4號相機右眼
+				camera4recordX = recordX;
+				camera4recordY = recordY;
+
+				outputData.Right_Y_negative_angle = camera4recordY;
+			}
+			else if(eyeControlRight == 4 && editWhere == 1) { //5號相機右眼
+				camera5recordX = recordX;
+				camera5recordY = recordY;
+
+				outputData.Right_Y_positive_angle = camera5recordY;
+			}
+
+			outputData.location = linesInfro.location;
+			/*outputData.Left_X_negative_angle = recordXmin;
+            outputData.Left_X_positive_angle = recordXmax;
+            outputData.Left_Y_negative_angle = recordYmin;
+            outputData.Left_Y_positive_angle = recordYmid;
+			outputData.Right_X_negative_angle = recordXmin;
+            outputData.Right_X_positive_angle = recordXmax;
+            outputData.Right_Y_negative_angle = recordYmid;
+            outputData.Right_Y_positive_angle = recordYmax;*/
+		}
+
+		function drawEyeData(cameraName) {
+			if(eyeMove)
+			    return;
+
+			var i, correct;
+			//console.log(scene.children);
+			for(i = 0; i < 17; i++)
+			{
+				if(scene.children[i].name == 'mesh')
+				{
+					correct = i;
+				}
+			}
+
+            if(cameraName == 1) {
+				if(modelState == 0) {
+                    drawMainCamera(11, 13, correct);
+				}
+				else if(modelState == 1) {
+					drawMainCamera(86, 88, correct);
+				}
+				else if(modelState == 2) {
+					drawMainCamera(49, 51, correct);
+				}
+			}
+			else if(cameraName == 2) {
+                if(modelState == 0) {
+					drawCamera2(11, 13, correct);
+				}
+				else if(modelState == 1) {
+					drawCamera2(86, 88, correct);
+				}
+				else if(modelState == 2) {
+					drawCamera2(49, 51, correct);
+				}
+            }
+            else if(cameraName == 3) {
+				if(modelState == 0) {
+					drawCamera3(11, 13, correct);
+                }
+                else if(modelState == 1) {
+					drawCamera3(86, 88, correct);
+                }
+                else if(modelState == 2) {
+					drawCamera3(49, 51, correct);
+                 }
+			}
+			else if(cameraName == 4) {
+				if(modelState == 0) {
+					drawCamera4(11, 13, correct);
+                }
+                else if(modelState == 1) {
+					drawCamera4(86, 88, correct);
+                }
+                else if(modelState == 2) {
+					drawCamera4(49, 51, correct);
+                }
+            }
+            else if(cameraName == 5) {
+				if(modelState == 0) {
+					drawCamera5(11, 13, correct);
+                }
+                else if(modelState == 1) {
+					drawCamera5(86, 88, correct);
+                }
+                else if(modelState == 2) {
+					drawCamera5(49, 51, correct);
+                }
+            }
+		}
+
+		function drawMainCamera(Left, Right, correct) {
+			if(eyeControlLeft == 1 || eyeControlRight == 1) {
+				scene.children[correct].skeleton.bones[Left].rotation.x = THREE.MathUtils.degToRad(outputData.Left_X_negative_angle);
+                scene.children[correct].skeleton.bones[Left].rotation.y = 0;
+                scene.children[correct].skeleton.bones[Right].rotation.x = THREE.MathUtils.degToRad(outputData.Right_X_negative_angle);
+                scene.children[correct].skeleton.bones[Right].rotation.y = 0; 
+			}
+			if(eyeControlLeft == 2 || eyeControlRight == 2) {
+				scene.children[correct].skeleton.bones[Left].rotation.x = THREE.MathUtils.degToRad(outputData.Left_X_positive_angle);
+                scene.children[correct].skeleton.bones[Left].rotation.y = 0;
+                scene.children[correct].skeleton.bones[Right].rotation.x = THREE.MathUtils.degToRad(outputData.Right_X_positive_angle);
+                scene.children[correct].skeleton.bones[Right].rotation.y = 0; 
+			}
+			if(eyeControlLeft == 3 || eyeControlRight == 3) {
+				scene.children[correct].skeleton.bones[Left].rotation.x = 0;
+                scene.children[correct].skeleton.bones[Left].rotation.y = THREE.MathUtils.degToRad(outputData.Left_Y_negative_angle);
+                scene.children[correct].skeleton.bones[Right].rotation.x = 0;
+                scene.children[correct].skeleton.bones[Right].rotation.y = THREE.MathUtils.degToRad(outputData.Right_Y_negative_angle); 
+			}
+			if(eyeControlLeft == 4 || eyeControlRight == 4) {
+				scene.children[correct].skeleton.bones[Left].rotation.x = 0;
+                scene.children[correct].skeleton.bones[Left].rotation.y = THREE.MathUtils.degToRad(outputData.Left_Y_positive_angle);
+                scene.children[correct].skeleton.bones[Right].rotation.x = 0;
+                scene.children[correct].skeleton.bones[Right].rotation.y = THREE.MathUtils.degToRad(outputData.Right_Y_positive_angle); 
+			}
+		}
+
+		function drawCamera2(Left, Right, correct) {
+			//if(eyeControlLeft == 1 || eyeControlRight == 1) {
+			scene.children[correct].skeleton.bones[Left].rotation.x = THREE.MathUtils.degToRad(outputData.Left_X_negative_angle);
+            scene.children[correct].skeleton.bones[Left].rotation.y = 0;
+            scene.children[correct].skeleton.bones[Right].rotation.x = THREE.MathUtils.degToRad(outputData.Right_X_negative_angle);
+            scene.children[correct].skeleton.bones[Right].rotation.y = 0; 
+			//}
+		}
+
+		function drawCamera3(Left, Right, correct) {
+			//if(eyeControlLeft == 2 || eyeControlRight == 2) {
+			scene.children[correct].skeleton.bones[Left].rotation.x = THREE.MathUtils.degToRad(outputData.Left_X_positive_angle);
+            scene.children[correct].skeleton.bones[Left].rotation.y = 0;
+            scene.children[correct].skeleton.bones[Right].rotation.x = THREE.MathUtils.degToRad(outputData.Right_X_positive_angle);
+            scene.children[correct].skeleton.bones[Right].rotation.y = 0; 
+			//}
+		}
+
+		function drawCamera4(Left, Right, correct) {
+			//if(eyeControlLeft == 3 || eyeControlRight == 3) {
+			scene.children[correct].skeleton.bones[Left].rotation.x = 0;
+            scene.children[correct].skeleton.bones[Left].rotation.y = THREE.MathUtils.degToRad(outputData.Left_Y_negative_angle);
+            scene.children[correct].skeleton.bones[Right].rotation.x = 0;
+            scene.children[correct].skeleton.bones[Right].rotation.y = THREE.MathUtils.degToRad(outputData.Right_Y_negative_angle); 
+			//}
+		}
+
+		function drawCamera5(Left, Right, correct) {
+			//if(eyeControlLeft == 4 || eyeControlRight == 4) {
+			scene.children[correct].skeleton.bones[Left].rotation.x = 0;
+            scene.children[correct].skeleton.bones[Left].rotation.y = THREE.MathUtils.degToRad(outputData.Left_Y_positive_angle);
+            scene.children[correct].skeleton.bones[Right].rotation.x = 0;
+            scene.children[correct].skeleton.bones[Right].rotation.y = THREE.MathUtils.degToRad(outputData.Right_Y_positive_angle); 
+			//}
+		}
+
+		window.addEventListener('contextmenu', function (e) {
+            if (e.button == 2) {
+
+                e.preventDefault();
+            }
+        }, false);
+
+		function animate() {
+
+			requestAnimationFrame(animate);
+			render();
+
+		}
+
+		function render() {
+
+			effect.clear();
+
+			drawEyeData(1);
+			effect.setViewport(0, 0, SCREEN_WIDTH / 2, SCREEN_HEIGHT);
+			effect.render(scene, camera);
+
+			drawEyeData(2);
+			effect.setViewport(SCREEN_WIDTH / 2, SCREEN_HEIGHT / 2, SCREEN_WIDTH / 4, SCREEN_HEIGHT / 2);
+			effect.render(scene, camera2);
+
+			drawEyeData(3);
+			effect.setViewport(SCREEN_WIDTH / 2 + SCREEN_WIDTH / 4, SCREEN_HEIGHT / 2, SCREEN_WIDTH / 4, SCREEN_HEIGHT / 2);
+			effect.render(scene, camera3);
+
+			drawEyeData(4);
+			effect.setViewport(SCREEN_WIDTH / 2, 0, SCREEN_WIDTH / 4, SCREEN_HEIGHT / 2);
+			effect.render(scene, camera4);
+
+			drawEyeData(5);
+			effect.setViewport(SCREEN_WIDTH / 2 + SCREEN_WIDTH / 4, 0, SCREEN_WIDTH / 4, SCREEN_HEIGHT / 2);
+			effect.render(scene, camera5);
+			drawEyeData(1);
+		}
+	</script>
+
+</body>
+
+</html>
